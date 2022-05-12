@@ -1,0 +1,8 @@
+.pio
+credentials.h
+!data/
+data/*
+*~
+\#*\#
+.\#*
+
