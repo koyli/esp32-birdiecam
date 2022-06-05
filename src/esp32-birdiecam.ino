@@ -22,8 +22,7 @@ RTC_DATA_ATTR time_t epoch_time = 0;
 
 WiFiMulti wifiMulti;
 
-#define FRAME_BUFFER_SIZE 30
-
+#define FRAME_BUFFER_SIZE 8
 camera_fb_t frames[FRAME_BUFFER_SIZE];
 
 void fatal_error(int code, const char* message)
@@ -39,6 +38,10 @@ void fatal_error(int code, const char* message)
                  
 static void initSDCard()
 {
+    
+    /* this pull up necessary in single line mode - certainly for 3.3v flashed esp32  */
+    pinMode(GPIO_NUM_13, INPUT_PULLUP);
+
     if (!SD_MMC.begin("/sdcard", true))
         fatal_error(SDCARD_ERROR, "Could not mount SD card");
 }
@@ -48,7 +51,7 @@ static void initWifi()
     wifiMulti.addAP(WIFI_SSID_1, WIFI_ACCESSCODE_1);
     wifiMulti.addAP(WIFI_SSID_2, WIFI_ACCESSCODE_2);
     wifiMulti.addAP(MESH_SSID_1, MESH_ACCESSCODE_1);
-
+    
     unsigned long startTime = millis();
     
     while (wifiMulti.run() != WL_CONNECTED && millis() - startTime < 20000)
@@ -60,14 +63,12 @@ static void initWifi()
     if (!MDNS.begin(SYSTEM)) 
         Serial.println("Error setting up MDNS responder!");
     
-
     configTime(0, 0, "pool.ntp.org");
 
     while(now() < 60000) {
         Serial.print("t");
         delay(100);
     }
-
     
 }
 
@@ -85,26 +86,52 @@ void setup() {
     digitalWrite(RED_LIGHT_PIN, LOW);           // turn on the red LED on the back of chip
     digitalWrite(WHITE_LIGHT_PIN, LOW);             // turn off
 
-    AWS_S3::setup(ACCESS_KEY, SECRET_KEY, BUCKET);
-
     initSDCard();
     
     ++bootCount;
 
+    Serial.print("Boot count: ");
+    Serial.println( bootCount);
+    AWS_S3::setup(ACCESS_KEY, SECRET_KEY, BUCKET);
 
     if (epoch_time > 0) {
         /* will be lower bound - better than 1970 */
         setTime(epoch_time);
     }
 
-    if (!Camera::configure(FRAME_BUFFER_SIZE, 10, false, (framesize_t) 8 )) {
+    if (!Camera::configure(FRAME_BUFFER_SIZE, 10, false, (framesize_t) FRAMESIZE_VGA )) {
         fatal_error(CAMERA_ERROR, "Camera not initialized");
     }
 
     digitalWrite(RED_LIGHT_PIN, HIGH);// turn off the red LED  - ready for action
     digitalWrite(IR_LED_PIN, HIGH);
 
+    char filename[17];
+    snprintf(filename, 17, "/test-%06d.avi", bootCount);
+    AviFileWriter::init_avi(filename, 640,480, 10, YUYV);
+    AviFileWriter::writeHeader();
+
 }
 
 
-void loop() {}
+void loop() {
+
+    camera_fb_t* fr = Camera::getFrame();
+    static int frames = 0;
+
+    frames++;
+    // UXGA 1600x1200
+
+    AviFileWriter::addFrame(fr->buf, fr->len);
+    Serial.println("Wrote frame");
+    Camera::returnFrame(fr);
+    delay(3);
+
+    if (frames == 150) {
+        AviFileWriter::close();
+        delay(100);
+        ESP.restart();
+
+    }
+    
+}
