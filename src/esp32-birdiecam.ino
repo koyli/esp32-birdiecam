@@ -128,7 +128,7 @@ void loop() {
     delay(3);
 
     if (frames == 150) {
-        AviFileWriter::close();
+        AviFileWriter::closeAvi();
         delay(100);
         ESP.restart();
 
