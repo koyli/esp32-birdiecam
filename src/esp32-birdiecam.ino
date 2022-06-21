@@ -20,6 +20,7 @@
 #define SDCARD_ERROR 2
 #define CAMERA_ERROR 1
 
+
 std::mutex sd_mutex;
 std::condition_variable cond;
 
@@ -92,18 +93,19 @@ static void initWifi()
         }
     if (wifiMulti.run() == WL_CONNECTED)
         Serial.println(" connected\n");
-    
+
     if (!MDNS.begin(SYSTEM)) 
         Serial.println("Error setting up MDNS responder!");
+
     
     printTime();
-    
-    configTime(0, 0, "pool.ntp.org");
-
+    configTime(0, 0, "europe.pool.ntp.org");
     while(time(nullptr) < 60000) {
+        time_t t = now();
+        Serial.println(year(t));
         delay(500);             /* give time to come up */
-    }
-    
+     }
+    setTime(time(nullptr));
 }
 
 
@@ -113,7 +115,7 @@ pthread_t video;
 
 bool video_ready = false;
 
-#define FRAMES 300
+#define FRAMES 30
 #define FRAME_RATE 30
 #define FRAME_TIME (1000/FRAME_RATE)
 
@@ -127,20 +129,30 @@ void* video_loop(void *param)
             camera_fb_t* fr = Camera::getFrame();
 
             AviFileWriter::addFrame(fr->buf, fr->len);
-            Serial.println("Wrote frame");
+            Serial.print("Wrote frame. ");  
+            Serial.print(frames);
+            Serial.println(" remaining");
+          
             Camera::returnFrame(fr);
 
             int elapsed = millis() - t;
             if (elapsed < FRAME_TIME)
                 delay(FRAME_TIME - elapsed);
-
+            frames--;
+            time_t pt = now();
+            Serial.println(year(pt));
+    
         }
             
+        Serial.println("Closing video");
+
+        delay(50);
         AviFileWriter::closeAvi();
         {
             std::lock_guard<std::mutex> lk(sd_mutex);
             video_ready = true;
         }
+        Serial.println("Notifying all");
         cond.notify_all();
         break;
     }
@@ -149,12 +161,12 @@ void* video_loop(void *param)
 
 void* upload_loop(void *param)
 {
+    Serial.println("Upload thread started");
     for (;;) {
         {
             std::unique_lock<std::mutex> lk(sd_mutex);
             
             cond.wait(lk, []{ return video_ready; });
-            Serial.println();
             
             Serial.print("file uploaded");
 
@@ -164,11 +176,13 @@ void* upload_loop(void *param)
             AWS_S3::put(filename, fd);
 
             Serial.print("file uploaded");
+            break;
         }
 
     }
+    Serial.println("Upload thread terminated");
     return NULL;
-        
+    
 }
 
 
@@ -186,7 +200,6 @@ void setup() {
 
     initSDCard();
     initWifi();
-
     ++bootCount;
 
     Serial.print("Boot count: ");
@@ -210,8 +223,13 @@ void setup() {
     AviFileWriter::init_avi(filename.c_str(), 640,480, 10, YUYV);
     AviFileWriter::writeHeader();
 
-    pthread_create(&uploader, NULL, upload_loop, NULL);
-    pthread_create(&video, NULL, video_loop, NULL);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 8192);
+
+
+    pthread_create(&uploader, &attr, upload_loop, NULL);
+    pthread_create(&video, &attr, video_loop, NULL);
 }
 
 
